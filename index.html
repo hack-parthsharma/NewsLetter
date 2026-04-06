@@ -345,26 +345,167 @@ function parseOgFromHTML(html) {
    AI SUMMARY: OpenRouter (multi-model) → MiniMax fallback
    ══════════════════════════════════════════════════════════════ */
 
-function buildPrompt(url, pageTitle) {
+/* buildPrompt is now replaced by buildPromptWithContent inside getAISummary */
+
+/* ══════════════════════════════════════════════════════════════
+   FETCH PAGE TEXT — grab article body for richer AI context
+   ══════════════════════════════════════════════════════════════ */
+async function fetchPageText(url) {
+  const proxies = [
+    u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+    u => `https://corsproxy.io/?${encodeURIComponent(u)}`
+  ];
+  for (const proxy of proxies) {
+    try {
+      const resp = await fetchWithTimeout(proxy(url), {}, 12000);
+      if (!resp.ok) continue;
+      let html = '';
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('json')) {
+        const j = await resp.json();
+        html = j.contents || '';
+      } else {
+        html = await resp.text();
+      }
+      if (html.length < 200) continue;
+      // Strip tags, collapse whitespace, grab first ~1500 chars of body text
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      // Remove scripts/styles
+      doc.querySelectorAll('script, style, nav, header, footer, aside').forEach(el => el.remove());
+      const bodyText = (doc.body?.innerText || '').replace(/\s+/g, ' ').trim();
+      if (bodyText.length > 100) return bodyText.slice(0, 1500);
+    } catch (_) {}
+  }
+  return '';
+}
+
+function buildPromptWithContent(url, pageTitle, pageText) {
   const titleHint = pageTitle
     ? `The article title is: "${pageTitle}".`
     : 'Derive the topic from the URL slug.';
+
+  const contentHint = pageText
+    ? `\n\nHere is the article text (may be truncated):\n${pageText}`
+    : '';
 
   return `You are a cybersecurity newsletter writer. Given this article URL and context, generate a JSON response with exactly these fields:
 - "title": A concise, professional headline for the article. ${titleHint}
 - "description": A 2-3 sentence professional summary of what this cybersecurity news is about. Write in third person, factual tone. Focus on: what happened, who is affected, and why it matters. Keep it under 80 words.
 
-URL: ${url}
+URL: ${url}${contentHint}
 
 IMPORTANT: Return ONLY valid JSON, no markdown, no backticks, no explanation. Just the raw JSON object with "title" and "description" keys.`;
 }
 
-async function getAISummary(url, pageTitle, hasImage) {
-  const prompt = buildPrompt(url, pageTitle);
+/* ══════════════════════════════════════════════════════════════
+   AI CALL HELPERS — with per-model retry
+   ══════════════════════════════════════════════════════════════ */
+async function tryOpenRouter(prompt, model) {
+  const resp = await fetchWithTimeout(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_KEY}`
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 500,
+      temperature: 0.3,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'You are a JSON API. You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no thinking tags.' },
+        { role: 'user', content: prompt }
+      ]
+    })
+  }, 20000);
 
-  // ── Try OpenRouter models first ──
+  if (!resp.ok) {
+    const retryable = resp.status === 429 || resp.status >= 500;
+    return { result: null, retryable, status: resp.status };
+  }
+
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) return { result: null, retryable: false };
+
+  const result = extractJSON(text);
+  return { result: (result && result.title && result.description) ? result : null, retryable: false };
+}
+
+async function tryMiniMax(prompt, epUrl) {
+  const resp = await fetchWithTimeout(epUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${MINIMAX_KEY}`
+    },
+    body: JSON.stringify({
+      model: MINIMAX_MODEL,
+      max_tokens: 500,
+      temperature: 0.3,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  }, 20000);
+
+  if (!resp.ok) return null;
+
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content?.trim()
+            || data.output?.text?.trim()
+            || '';
+  if (!text) return null;
+
+  const result = extractJSON(text);
+  return (result && result.title && result.description) ? result : null;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MAIN AI SUMMARY — with page scraping, retries & final fallback
+   ══════════════════════════════════════════════════════════════ */
+async function getAISummary(url, pageTitle, hasImage) {
+  // Fetch page content in parallel for richer prompts
+  let pageText = '';
+  try { pageText = await fetchPageText(url); } catch (_) {}
+
+  const prompt = buildPromptWithContent(url, pageTitle, pageText);
+
+  // ── Pass 1: Try all OpenRouter models (with 1 retry on 429/5xx) ──
   for (let mi = 0; mi < OPENROUTER_MODELS.length; mi++) {
     const model = OPENROUTER_MODELS[mi];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { result, retryable, status } = await tryOpenRouter(prompt, model);
+        if (result) return result;
+        if (retryable && attempt === 0) {
+          log(`    → ${model} returned ${status}, retrying...`);
+          await new Promise(r => setTimeout(r, status === 429 ? 3000 : 1500));
+          continue;
+        }
+        break; // not retryable, move to next model
+      } catch (e) { break; }
+    }
+    if (mi < OPENROUTER_MODELS.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  // ── Pass 2: MiniMax fallback ──
+  const MINIMAX_ENDPOINTS = [
+    'https://api.minimax.io/v1/chat/completions',
+    MINIMAX_URL
+  ];
+  for (const epUrl of MINIMAX_ENDPOINTS) {
+    try {
+      const result = await tryMiniMax(prompt, epUrl);
+      if (result) return result;
+    } catch (_) {}
+  }
+
+  // ── Pass 3: Retry top 3 OpenRouter models with simpler prompt (no JSON format constraint) ──
+  log('    → All providers failed, retrying with simpler prompt...', 'info');
+  const simplePrompt = pageTitle
+    ? `Write a 2-3 sentence cybersecurity newsletter summary for this article titled "${pageTitle}" (URL: ${url}).${pageText ? ' Article excerpt: ' + pageText.slice(0, 800) : ''} Return ONLY a JSON object like {"title":"...","description":"..."}.`
+    : `Write a 2-3 sentence cybersecurity newsletter summary for this article: ${url}. Return ONLY a JSON object like {"title":"...","description":"..."}.`;
+
+  for (let mi = 0; mi < Math.min(3, OPENROUTER_MODELS.length); mi++) {
     try {
       const resp = await fetchWithTimeout(OPENROUTER_URL, {
         method: 'POST',
@@ -373,68 +514,41 @@ async function getAISummary(url, pageTitle, hasImage) {
           'Authorization': `Bearer ${OPENROUTER_KEY}`
         },
         body: JSON.stringify({
-          model: model,
+          model: OPENROUTER_MODELS[mi],
           max_tokens: 500,
-          temperature: 0.3,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: 'You are a JSON API. You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no thinking tags.' },
-            { role: 'user', content: prompt }
-          ]
+          temperature: 0.5,
+          messages: [{ role: 'user', content: simplePrompt }]
         })
-      }, 20000);
-
-      if (!resp.ok) {
-        if (resp.status === 429) {
-          const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
-          await new Promise(r => setTimeout(r, retryAfter > 0 ? retryAfter * 1000 : 2000));
-        }
-        continue;
-      }
-
+      }, 25000);
+      if (!resp.ok) continue;
       const data = await resp.json();
       const text = data.choices?.[0]?.message?.content?.trim();
       if (!text) continue;
-
       const result = extractJSON(text);
       if (result && result.title && result.description) return result;
-    } catch (e) { /* try next model */ }
-    if (mi < OPENROUTER_MODELS.length - 1) await new Promise(r => setTimeout(r, 500));
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 1000));
   }
 
-  // ── Fallback: MiniMax ──
-  const MINIMAX_ENDPOINTS = [
-    { url: 'https://api.minimax.io/v1/chat/completions', name: 'MiniMax-OAI' },
-    { url: MINIMAX_URL, name: 'MiniMax-Native' }
-  ];
-
-  for (const ep of MINIMAX_ENDPOINTS) {
-    try {
-      const resp = await fetchWithTimeout(ep.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MINIMAX_KEY}`
-        },
-        body: JSON.stringify({
-          model: MINIMAX_MODEL,
-          max_tokens: 500,
-          temperature: 0.3,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      }, 20000);
-
-      if (!resp.ok) continue;
-
-      const data = await resp.json();
-      const text = data.choices?.[0]?.message?.content?.trim()
-                || data.output?.text?.trim()
-                || '';
-      if (!text) continue;
-
-      const result = extractJSON(text);
-      if (result && result.title && result.description) return result;
-    } catch (e) { /* try next endpoint */ }
+  // ── Pass 4: Generate a smart fallback from page text / title ──
+  log('    → Generating fallback summary from metadata...', 'info');
+  if (pageTitle || pageText) {
+    const title = pageTitle || 'Security Advisory';
+    let description = '';
+    if (pageText && pageText.length > 100) {
+      // Extract first ~2 meaningful sentences from page text
+      const sentences = pageText.match(/[A-Z][^.!?]*[.!?]/g) || [];
+      const good = sentences.filter(s => s.length > 30 && s.length < 300).slice(0, 2);
+      if (good.length) {
+        description = good.join(' ').trim();
+        if (description.length > 350) description = description.slice(0, 347) + '...';
+      }
+    }
+    if (!description) {
+      // Build from title keywords
+      description = `This article covers ${title.toLowerCase().replace(/^[\W]+/, '')}. Organizations should review the details and assess potential impact on their security posture.`;
+    }
+    return { title, description };
   }
 
   throw new Error('All AI providers failed');
@@ -565,8 +679,13 @@ async function generate() {
       log(`[${i+1}/${links.length}] ✓ ${ogImage ? '🖼️' : '⬜'} "${ai.title || ogTitle}"`, 'success');
     } catch (err) {
       setStatus(index, 'error');
-      log(`[${i+1}/${links.length}] ✗ Failed: ${ogTitle || url}`, 'error');
-      stories.push({ url, title: ogTitle || 'Article ' + index, description: 'Summary generation failed.', imageUrl: ogImage });
+      log(`[${i+1}/${links.length}] ⚠ AI failed, using metadata fallback: ${ogTitle || url}`, 'error');
+      // Even on total failure, try to build something useful from the title
+      let fallbackDesc = 'Summary generation failed.';
+      if (ogTitle) {
+        fallbackDesc = `This article covers ${ogTitle.toLowerCase().replace(/^[\W]+/, '')}. Review the full article for details on the security implications.`;
+      }
+      stories.push({ url, title: ogTitle || 'Article ' + index, description: fallbackDesc, imageUrl: ogImage });
     }
 
     setProgress(5 + ((i+1) / links.length) * 90);
