@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CyberSec Newsletter Generator</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3a;
+    --accent: #375d81;
+    --accent-bright: #4a8bc2;
+    --accent-glow: rgba(74, 139, 194, 0.15);
+    --text: #e0e0e8;
+    --text-dim: #8888a0;
+    --danger: #ff4466;
+    --success: #22cc88;
+    --warn: #ffaa33;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; overflow-x: hidden;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background: linear-gradient(90deg, rgba(55,93,129,0.03) 1px, transparent 1px),
+                linear-gradient(rgba(55,93,129,0.03) 1px, transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+  .app { position: relative; z-index: 1; max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+  .header { text-align: center; margin-bottom: 48px; position: relative; }
+  .header::after {
+    content: ''; position: absolute; bottom: -24px; left: 50%;
+    transform: translateX(-50%); width: 60px; height: 2px; background: var(--accent);
+  }
+  .header h1 { font-family: 'Space Mono', monospace; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
+  .header h1 span { color: var(--accent-bright); }
+  .header p { color: var(--text-dim); font-size: 14px; font-weight: 300; }
+  .config-bar { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
+  .config-bar label {
+    font-size: 12px; font-weight: 500; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px;
+    display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px;
+  }
+  .config-bar input {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px; transition: border-color 0.2s;
+  }
+  .config-bar input:focus { outline: none; border-color: var(--accent); }
+  .links-section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 24px; margin-bottom: 24px;
+  }
+  .links-section h2 {
+    font-family: 'Space Mono', monospace; font-size: 14px; color: var(--accent-bright);
+    text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px;
+  }
+  .link-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .link-num { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-dim); width: 24px; text-align: right; flex-shrink: 0; }
+  .link-row input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 13px; transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .link-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .link-row input::placeholder { color: #444460; }
+  .link-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--border); transition: background 0.3s; }
+  .link-status.processing { background: var(--warn); animation: pulse 1s infinite; }
+  .link-status.done { background: var(--success); }
+  .link-status.error { background: var(--danger); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .actions { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
+  .btn {
+    padding: 12px 28px; border: none; border-radius: 6px;
+    font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s; letter-spacing: 0.3px;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-bright); box-shadow: 0 4px 20px var(--accent-glow); }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); }
+  .progress-bar { height: 3px; background: var(--border); border-radius: 2px; margin-bottom: 32px; overflow: hidden; display: none; }
+  .progress-bar.active { display: block; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); border-radius: 2px; transition: width 0.4s ease; width: 0%; }
+  .log {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 24px; max-height: 200px; overflow-y: auto;
+    font-family: 'Space Mono', monospace; font-size: 12px; line-height: 1.8; display: none;
+  }
+  .log.active { display: block; }
+  .log-entry { color: var(--text-dim); }
+  .log-entry.info { color: var(--accent-bright); }
+  .log-entry.success { color: var(--success); }
+  .log-entry.error { color: var(--danger); }
+  .preview-section { margin-top: 32px; display: none; }
+  .preview-section.active { display: block; }
+  .preview-section h2 { font-family: 'Space Mono', monospace; font-size: 14px; color: var(--accent-bright); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px; }
+  .preview-frame { background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.4); }
+  .preview-frame iframe { width: 100%; height: 800px; border: none; }
+  .copy-area { margin-top: 16px; }
+  .copy-area textarea {
+    width: 100%; height: 200px; background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); padding: 14px; border-radius: 8px;
+    font-family: 'Space Mono', monospace; font-size: 11px; resize: vertical; margin-top: 8px;
+  }
+  @media (max-width: 600px) {
+    .header h1 { font-size: 22px; }
+    .config-bar { flex-direction: column; }
+    .actions { flex-direction: column; }
+    .btn { width: 100%; text-align: center; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>&gt; <span>CyberSec</span> Newsletter Gen</h1>
+    <p>Paste up to 10 links. Thumbnails auto-extracted. AI writes the summaries.</p>
+  </div>
+  <div class="config-bar">
+    <label>Newsletter #<input type="text" id="newsletterNum" value="194" placeholder="e.g. 194"></label>
+    <label>Date<input type="date" id="newsletterDate" value=""></label>
+    <label>Company Name<input type="text" id="companyName" value="Casepoint" placeholder="Your company"></label>
+    <label>Logo URL<input type="text" id="logoUrl" value="https://downloads.casepoint.com/hubfs/OPEXUS___Casepoint.png?" placeholder="https://..."></label>
+  </div>
+  <div class="links-section">
+    <h2>News Links</h2>
+    <div id="linkInputs"></div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary" id="generateBtn" onclick="generate()">Generate Newsletter</button>
+    <button class="btn btn-secondary" id="downloadBtn" onclick="downloadHTML()" disabled>Download HTML</button>
+    <button class="btn btn-secondary" id="copyBtn" onclick="copyHTML()" disabled>Copy HTML</button>
+  </div>
+  <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="log" id="log"></div>
+  <div class="preview-section" id="previewSection">
+    <h2>Preview</h2>
+    <div class="preview-frame"><iframe id="previewFrame"></iframe></div>
+    <div class="copy-area">
+      <label style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;">Raw HTML</label>
+      <textarea id="rawHtml" readonly></textarea>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   API CONFIGURATION
+   Primary: OpenRouter (multiple model fallbacks)
+   Secondary: MiniMax (if all OpenRouter models fail)
+   ══════════════════════════════════════════════════════════════ */
+const OPENROUTER_KEY = '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';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// Confirmed free models from openrouter.ai/collections/free-models (April 2026)
+const OPENROUTER_MODELS = [
+  'qwen/qwen3.6-plus:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'openai/gpt-oss-120b:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'minimax/minimax-m2.5:free',
+  'stepfun/step-3.5-flash:free',
+  'openrouter/free'
+];
+
+const MINIMAX_KEY = 'sk-api-8rqD12zh7Mx0sbaV_8no3pEWSG2ncnwEi0SOginreZT_ChW6YYkrNILnwslad4iKSqV1tI-VnJjO2m6qM8hljmm0aeEnynD28K57sxwWHnhQBi5YFfTTXgY';
+const MINIMAX_URL = 'https://api.minimax.io/v1/text/chatcompletion_v2';
+const MINIMAX_MODEL = 'MiniMax-M2.5';
+
+let generatedHTML = '';
+
+(function init() {
+  document.getElementById('newsletterDate').value = new Date().toISOString().split('T')[0];
+  const c = document.getElementById('linkInputs');
+  for (let i = 1; i <= 10; i++) {
+    const r = document.createElement('div');
+    r.className = 'link-row';
+    r.innerHTML = `<span class="link-num">${String(i).padStart(2,'0')}</span>
+      <input type="url" id="link${i}" placeholder="https://example.com/cybersec-article-${i}">
+      <div class="link-status" id="status${i}"></div>`;
+    c.appendChild(r);
+  }
+})();
+
+function log(msg, type = '') {
+  const el = document.getElementById('log');
+  el.classList.add('active');
+  const e = document.createElement('div');
+  e.className = `log-entry ${type}`;
+  e.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(e);
+  el.scrollTop = el.scrollHeight;
+}
+function setProgress(p) {
+  document.getElementById('progressBar').classList.add('active');
+  document.getElementById('progressFill').style.width = p + '%';
+}
+function setStatus(i, s) {
+  document.getElementById(`status${i}`).className = `link-status ${s}`;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ROBUST JSON EXTRACTION
+   Handles models that wrap JSON in prose, markdown, or thinking tags
+   ══════════════════════════════════════════════════════════════ */
+function extractJSON(text) {
+  // Strip markdown fences
+  text = text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+  // Strip <think>...</think> blocks (deepseek-r1 style)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  // Try direct parse first
+  try { return JSON.parse(text); } catch (_) {}
+
+  // Try to find a JSON object in the text
+  const match = text.match(/\{[\s\S]*?"title"[\s\S]*?"description"[\s\S]*?\}/);
+  if (match) {
+    try { return JSON.parse(match[0]); } catch (_) {}
+  }
+
+  // Last resort: find any {...}
+  const braceMatch = text.match(/\{[^{}]*\}/);
+  if (braceMatch) {
+    try { return JSON.parse(braceMatch[0]); } catch (_) {}
+  }
+
+  return null;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   IMAGE + TITLE EXTRACTION
+   Uses dedicated link-preview / metadata APIs (not raw CORS proxies).
+   These services are built to return og:image — no CORS issues.
+   ══════════════════════════════════════════════════════════════ */
+
+async function fetchWithTimeout(url, opts = {}, ms = 10000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctrl.signal });
+    clearTimeout(id);
+    return r;
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
+  }
+}
+
+async function extractMetadata(url) {
+  // Strategy 1: jsonlink.io
+  try {
+    const resp = await fetchWithTimeout(
+      `https://jsonlink.io/api/extract?url=${encodeURIComponent(url)}`
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      const img = data.images?.[0] || '';
+      const title = data.title || '';
+      if (img || title) return { ogImage: img, ogTitle: title };
+    }
+  } catch (_) {}
+
+  // Strategy 2: microlink.io
+  try {
+    const resp = await fetchWithTimeout(
+      `https://api.microlink.io/?url=${encodeURIComponent(url)}`
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      const img = data.data?.image?.url || '';
+      const title = data.data?.title || '';
+      if (img || title) return { ogImage: img, ogTitle: title };
+    }
+  } catch (_) {}
+
+  // Strategy 3: allorigins
+  try {
+    const resp = await fetchWithTimeout(
+      `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
+    );
+    if (resp.ok) {
+      const json = await resp.json();
+      const html = json.contents || '';
+      if (html.length > 200) {
+        const result = parseOgFromHTML(html);
+        if (result.ogImage || result.ogTitle) return result;
+      }
+    }
+  } catch (_) { log(`    → allorigins: failed`); }
+
+  // Strategy 4: corsproxy.io
+  try {
+    const resp = await fetchWithTimeout(
+      `https://corsproxy.io/?${encodeURIComponent(url)}`
+    );
+    if (resp.ok) {
+      const html = await resp.text();
+      if (html.length > 200 && html.includes('<')) {
+        const result = parseOgFromHTML(html);
+        if (result.ogImage || result.ogTitle) return result;
+      }
+    }
+  } catch (_) {}
+
+  return { ogImage: '', ogTitle: '' };
+}
+
+function parseOgFromHTML(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  let ogImage = '';
+  for (const sel of [
+    'meta[property="og:image"]',
+    'meta[name="og:image"]',
+    'meta[property="og:image:url"]',
+    'meta[name="twitter:image"]',
+    'meta[property="twitter:image"]',
+    'meta[name="twitter:image:src"]',
+  ]) {
+    const el = doc.querySelector(sel);
+    if (el) {
+      const v = (el.getAttribute('content') || '').trim();
+      if (v && v.startsWith('http')) { ogImage = v; break; }
+    }
+  }
+
+  let ogTitle = '';
+  const tm = doc.querySelector('meta[property="og:title"]') || doc.querySelector('meta[name="og:title"]');
+  if (tm) ogTitle = (tm.getAttribute('content') || '').trim();
+  if (!ogTitle) {
+    const t = doc.querySelector('title');
+    if (t) ogTitle = t.textContent.trim();
+  }
+
+  return { ogImage, ogTitle };
+}
+
+/* ══════════════════════════════════════════════════════════════
+   AI SUMMARY: OpenRouter (multi-model) → MiniMax fallback
+   ══════════════════════════════════════════════════════════════ */
+
+function buildPrompt(url, pageTitle) {
+  const titleHint = pageTitle
+    ? `The article title is: "${pageTitle}".`
+    : 'Derive the topic from the URL slug.';
+
+  return `You are a cybersecurity newsletter writer. Given this article URL and context, generate a JSON response with exactly these fields:
+- "title": A concise, professional headline for the article. ${titleHint}
+- "description": A 2-3 sentence professional summary of what this cybersecurity news is about. Write in third person, factual tone. Focus on: what happened, who is affected, and why it matters. Keep it under 80 words.
+
+URL: ${url}
+
+IMPORTANT: Return ONLY valid JSON, no markdown, no backticks, no explanation. Just the raw JSON object with "title" and "description" keys.`;
+}
+
+async function getAISummary(url, pageTitle, hasImage) {
+  const prompt = buildPrompt(url, pageTitle);
+
+  // ── Try OpenRouter models first ──
+  for (let mi = 0; mi < OPENROUTER_MODELS.length; mi++) {
+    const model = OPENROUTER_MODELS[mi];
+    try {
+      const resp = await fetchWithTimeout(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_KEY}`
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 500,
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: 'You are a JSON API. You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no thinking tags.' },
+            { role: 'user', content: prompt }
+          ]
+        })
+      }, 20000);
+
+      if (!resp.ok) {
+        if (resp.status === 429) {
+          const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
+          await new Promise(r => setTimeout(r, retryAfter > 0 ? retryAfter * 1000 : 2000));
+        }
+        continue;
+      }
+
+      const data = await resp.json();
+      const text = data.choices?.[0]?.message?.content?.trim();
+      if (!text) continue;
+
+      const result = extractJSON(text);
+      if (result && result.title && result.description) return result;
+    } catch (e) { /* try next model */ }
+    if (mi < OPENROUTER_MODELS.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  // ── Fallback: MiniMax ──
+  const MINIMAX_ENDPOINTS = [
+    { url: 'https://api.minimax.io/v1/chat/completions', name: 'MiniMax-OAI' },
+    { url: MINIMAX_URL, name: 'MiniMax-Native' }
+  ];
+
+  for (const ep of MINIMAX_ENDPOINTS) {
+    try {
+      const resp = await fetchWithTimeout(ep.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MINIMAX_KEY}`
+        },
+        body: JSON.stringify({
+          model: MINIMAX_MODEL,
+          max_tokens: 500,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      }, 20000);
+
+      if (!resp.ok) continue;
+
+      const data = await resp.json();
+      const text = data.choices?.[0]?.message?.content?.trim()
+                || data.output?.text?.trim()
+                || '';
+      if (!text) continue;
+
+      const result = extractJSON(text);
+      if (result && result.title && result.description) return result;
+    } catch (e) { /* try next endpoint */ }
+  }
+
+  throw new Error('All AI providers failed');
+}
+
+function formatDate(ds) {
+  return new Date(ds + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function buildNewsletterHTML(stories) {
+  const num = document.getElementById('newsletterNum').value || '194';
+  const date = formatDate(document.getElementById('newsletterDate').value);
+  const company = document.getElementById('companyName').value || 'Casepoint';
+  const logo = document.getElementById('logoUrl').value;
+
+  let html = '';
+  stories.forEach((s, i) => {
+    const img = s.imageUrl
+      ? `<a href="${s.url}"><img src="${s.imageUrl}" border="0" width="200" style="display:block;width:100%;height:130px;max-width:200px;vertical-align:top;object-fit:cover;"></a>`
+      : `<a href="${s.url}"><div style="width:200px;height:130px;background:#375d81;display:flex;align-items:center;justify-content:center;"><span style="color:#fff;font-family:arial;font-size:36px;font-weight:bold;">${i+1}</span></div></a>`;
+
+    html += `
+<!-- STORY ${i+1} -->
+<tr>
+<td style="background-color:#fff;padding:10px 10px 15px 10px;">
+<table cellpadding="0" cellspacing="0" border="0" width="100%">
+<tr valign="top">
+<td width="32%" valign="top">${img}</td>
+<td width="68%" style="padding:0 0 0 10px;font-family:arial,helvetica,sans-serif;font-size:12px;color:#666666;line-height:15px;">
+<p style="margin:0 0 0.5em 0;font-size:16px;line-height:20px;">
+<a href="${s.url}" style="color:#375d81;font-family:tahoma,arial,helvetica,sans-serif;font-weight:bold;text-decoration:none;text-align:justify;" target="_blank">${s.title}</a>
+</p>
+<p style="margin:0 0 10px 0;line-height:15px;text-align:justify;" class="storydesc">${s.description}</p>
+</td>
+</tr>
+</table>
+<!-- END STORY ${i+1} -->
+`;
+  });
+
+  return `<html>
+<head><title>${company} Newsletter</title></head>
+<body>
+<table cellpadding="25" cellspacing="0" border="0" style="max-width:700px;" align="center">
+<tr>
+<td style="padding-right:10px;padding-bottom:5px;">
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:700px;">
+<td style="vertical-align:middle;background:#fff;text-align:left;padding:0 0 20px;border-bottom:1px solid #ddd">
+<a href="#" target="_blank"><img width="211" src="${logo}" alt="${company}" height="35"></a>
+</td>
+<td style="border-bottom:1px solid #ddd;padding:0 0 15px;vertical-align:middle;text-align:right">
+<span style="float:right;color:#375d81;font-family:Helvetica;font-size:18px;font-style:normal;font-weight:bold;letter-spacing:normal">Newsletter #${num}</span>
+</td>
+</table>
+</td>
+</tr>
+<tr>
+<td style="background-color:#fff;padding:10px 10px 0 10px;">
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="padding-left:15px;padding-bottom:0px;">
+<tbody><tr valign="middle">
+<td nowrap="" style="font-family:tahoma,arial,helvetica,sans-serif;font-size:15px;color:#375d81;font-weight:bold;"></td>
+<td nowrap="" style="font-family:arial,helvetica,sans-serif;font-size:14px;color:#375d81;text-align:right;">${date}</td>
+</tr></tbody>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:5px 0 0 15px;font-family:Arial,Helvetica,sans-serif">
+<table width="100%" border="0" cellpadding="0" cellspacing="0">
+<tbody>
+<tr><td style="padding:0 0 0 15px;text-align:left;font-size:16px;line-height:20px;color:#4c4c4a;font-family:Arial,Helvetica,sans-serif">
+${html}
+<tr><td style="padding:0 10px;"><hr style="height:1px;border:none;color:#ddd;background-color:#ddd;text-align:left"></td></tr>
+<tr><td style="padding:0 0 0 10px">
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family:Arial,Helvetica,sans-serif">
+<tbody><tr><td style="font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#4c4c4a;font-weight:bold">Power. Productivity. Results.</td></tr></tbody>
+</table>
+</td></tr>
+</tbody></table><br>
+</td>
+</tr>
+</table>
+</body>
+</html>`;
+}
+
+async function generate() {
+  const links = [];
+  for (let i = 1; i <= 10; i++) {
+    const v = document.getElementById(`link${i}`).value.trim();
+    if (v) links.push({ url: v, index: i });
+  }
+  if (!links.length) { log('No links entered.', 'error'); return; }
+
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true; btn.textContent = 'Generating...';
+  document.getElementById('downloadBtn').disabled = true;
+  document.getElementById('copyBtn').disabled = true;
+
+  log(`Processing ${links.length} articles...`, 'info');
+  setProgress(5);
+
+  const stories = [];
+
+  for (let i = 0; i < links.length; i++) {
+    const { url, index } = links[i];
+    setStatus(index, 'processing');
+
+    let ogImage = '', ogTitle = '';
+
+    // STEP 1: Extract thumbnail + title via metadata APIs
+    try {
+      const meta = await extractMetadata(url);
+      ogImage = meta.ogImage;
+      ogTitle = meta.ogTitle;
+    } catch (e) {}
+
+    // STEP 2: AI for title + description only
+    try {
+      const ai = await getAISummary(url, ogTitle, !!ogImage);
+      stories.push({
+        url,
+        title: ai.title || ogTitle || 'Article ' + index,
+        description: ai.description || 'Summary could not be generated.',
+        imageUrl: ogImage
+      });
+      setStatus(index, 'done');
+      log(`[${i+1}/${links.length}] ✓ ${ogImage ? '🖼️' : '⬜'} "${ai.title || ogTitle}"`, 'success');
+    } catch (err) {
+      setStatus(index, 'error');
+      log(`[${i+1}/${links.length}] ✗ Failed: ${ogTitle || url}`, 'error');
+      stories.push({ url, title: ogTitle || 'Article ' + index, description: 'Summary generation failed.', imageUrl: ogImage });
+    }
+
+    setProgress(5 + ((i+1) / links.length) * 90);
+    if (i < links.length - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  generatedHTML = buildNewsletterHTML(stories);
+
+  document.getElementById('previewSection').classList.add('active');
+  document.getElementById('previewFrame').srcdoc = generatedHTML;
+  document.getElementById('rawHtml').value = generatedHTML;
+
+  setProgress(100);
+  log(`Done! ${stories.length} stories generated.`, 'success');
+
+  btn.disabled = false; btn.textContent = 'Regenerate';
+  document.getElementById('downloadBtn').disabled = false;
+  document.getElementById('copyBtn').disabled = false;
+}
+
+function downloadHTML() {
+  if (!generatedHTML) return;
+  const n = document.getElementById('newsletterNum').value || '194';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([generatedHTML], { type: 'text/html' }));
+  a.download = `Newsletter_${n}.html`; a.click();
+  log('Downloaded.', 'success');
+}
+
+function copyHTML() {
+  if (!generatedHTML) return;
+  navigator.clipboard.writeText(generatedHTML).then(() => {
+    log('Copied to clipboard.', 'success');
+    const b = document.getElementById('copyBtn');
+    b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy HTML', 2000);
+  });
+}
+</script>
+</body>
+</html>
