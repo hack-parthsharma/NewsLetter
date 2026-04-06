@@ -88,16 +88,6 @@
   .progress-bar { height: 3px; background: var(--border); border-radius: 2px; margin-bottom: 32px; overflow: hidden; display: none; }
   .progress-bar.active { display: block; }
   .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); border-radius: 2px; transition: width 0.4s ease; width: 0%; }
-  .log {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px; margin-bottom: 24px; max-height: 200px; overflow-y: auto;
-    font-family: 'Space Mono', monospace; font-size: 12px; line-height: 1.8; display: none;
-  }
-  .log.active { display: block; }
-  .log-entry { color: var(--text-dim); }
-  .log-entry.info { color: var(--accent-bright); }
-  .log-entry.success { color: var(--success); }
-  .log-entry.error { color: var(--danger); }
   .preview-section { margin-top: 32px; display: none; }
   .preview-section.active { display: block; }
   .preview-section h2 { font-family: 'Space Mono', monospace; font-size: 14px; color: var(--accent-bright); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px; }
@@ -139,7 +129,6 @@
     <button class="btn btn-secondary" id="copyBtn" onclick="copyHTML()" disabled>Copy HTML</button>
   </div>
   <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
-  <div class="log" id="log"></div>
   <div class="preview-section" id="previewSection">
     <h2>Preview</h2>
     <div class="preview-frame"><iframe id="previewFrame"></iframe></div>
@@ -151,14 +140,8 @@
 </div>
 
 <script>
-/* ══════════════════════════════════════════════════════════════
-   API CONFIGURATION
-   Primary: OpenRouter (multiple model fallbacks)
-   Secondary: MiniMax (if all OpenRouter models fail)
-   ══════════════════════════════════════════════════════════════ */
 const OPENROUTER_KEY = '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';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-// Confirmed free models from openrouter.ai/collections/free-models (April 2026)
 const OPENROUTER_MODELS = [
   'qwen/qwen3.6-plus:free',
   'meta-llama/llama-3.3-70b-instruct:free',
@@ -174,7 +157,7 @@ const MINIMAX_URL = 'https://api.minimax.io/v1/text/chatcompletion_v2';
 const MINIMAX_MODEL = 'MiniMax-M2.5';
 
 let generatedHTML = '';
-let openRouterDisabled = false; // Set true on 401/402 to skip for remaining articles
+let openRouterDisabled = false;
 
 (function init() {
   document.getElementById('newsletterDate').value = new Date().toISOString().split('T')[0];
@@ -189,15 +172,6 @@ let openRouterDisabled = false; // Set true on 401/402 to skip for remaining art
   }
 })();
 
-function log(msg, type = '') {
-  const el = document.getElementById('log');
-  el.classList.add('active');
-  const e = document.createElement('div');
-  e.className = `log-entry ${type}`;
-  e.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  el.appendChild(e);
-  el.scrollTop = el.scrollHeight;
-}
 function setProgress(p) {
   document.getElementById('progressBar').classList.add('active');
   document.getElementById('progressFill').style.width = p + '%';
@@ -206,39 +180,16 @@ function setStatus(i, s) {
   document.getElementById(`status${i}`).className = `link-status ${s}`;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   ROBUST JSON EXTRACTION
-   Handles models that wrap JSON in prose, markdown, or thinking tags
-   ══════════════════════════════════════════════════════════════ */
 function extractJSON(text) {
-  // Strip markdown fences
   text = text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-  // Strip <think>...</think> blocks (deepseek-r1 style)
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-
-  // Try direct parse first
   try { return JSON.parse(text); } catch (_) {}
-
-  // Try to find a JSON object in the text
   const match = text.match(/\{[\s\S]*?"title"[\s\S]*?"description"[\s\S]*?\}/);
-  if (match) {
-    try { return JSON.parse(match[0]); } catch (_) {}
-  }
-
-  // Last resort: find any {...}
+  if (match) { try { return JSON.parse(match[0]); } catch (_) {} }
   const braceMatch = text.match(/\{[^{}]*\}/);
-  if (braceMatch) {
-    try { return JSON.parse(braceMatch[0]); } catch (_) {}
-  }
-
+  if (braceMatch) { try { return JSON.parse(braceMatch[0]); } catch (_) {} }
   return null;
 }
-
-/* ══════════════════════════════════════════════════════════════
-   IMAGE + TITLE EXTRACTION
-   Uses dedicated link-preview / metadata APIs (not raw CORS proxies).
-   These services are built to return og:image — no CORS issues.
-   ══════════════════════════════════════════════════════════════ */
 
 async function fetchWithTimeout(url, opts = {}, ms = 10000) {
   const ctrl = new AbortController();
@@ -254,11 +205,8 @@ async function fetchWithTimeout(url, opts = {}, ms = 10000) {
 }
 
 async function extractMetadata(url) {
-  // Strategy 1: jsonlink.io
   try {
-    const resp = await fetchWithTimeout(
-      `https://jsonlink.io/api/extract?url=${encodeURIComponent(url)}`
-    );
+    const resp = await fetchWithTimeout(`https://jsonlink.io/api/extract?url=${encodeURIComponent(url)}`);
     if (resp.ok) {
       const data = await resp.json();
       const img = data.images?.[0] || '';
@@ -266,12 +214,8 @@ async function extractMetadata(url) {
       if (img || title) return { ogImage: img, ogTitle: title };
     }
   } catch (_) {}
-
-  // Strategy 2: microlink.io
   try {
-    const resp = await fetchWithTimeout(
-      `https://api.microlink.io/?url=${encodeURIComponent(url)}`
-    );
+    const resp = await fetchWithTimeout(`https://api.microlink.io/?url=${encodeURIComponent(url)}`);
     if (resp.ok) {
       const data = await resp.json();
       const img = data.data?.image?.url || '';
@@ -279,12 +223,8 @@ async function extractMetadata(url) {
       if (img || title) return { ogImage: img, ogTitle: title };
     }
   } catch (_) {}
-
-  // Strategy 3: allorigins
   try {
-    const resp = await fetchWithTimeout(
-      `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
-    );
+    const resp = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
     if (resp.ok) {
       const json = await resp.json();
       const html = json.contents || '';
@@ -293,13 +233,9 @@ async function extractMetadata(url) {
         if (result.ogImage || result.ogTitle) return result;
       }
     }
-  } catch (_) { log(`    → allorigins: failed`); }
-
-  // Strategy 4: corsproxy.io
+  } catch (_) {}
   try {
-    const resp = await fetchWithTimeout(
-      `https://corsproxy.io/?${encodeURIComponent(url)}`
-    );
+    const resp = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(url)}`);
     if (resp.ok) {
       const html = await resp.text();
       if (html.length > 200 && html.includes('<')) {
@@ -308,21 +244,16 @@ async function extractMetadata(url) {
       }
     }
   } catch (_) {}
-
   return { ogImage: '', ogTitle: '' };
 }
 
 function parseOgFromHTML(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-
   let ogImage = '';
   for (const sel of [
-    'meta[property="og:image"]',
-    'meta[name="og:image"]',
-    'meta[property="og:image:url"]',
-    'meta[name="twitter:image"]',
-    'meta[property="twitter:image"]',
-    'meta[name="twitter:image:src"]',
+    'meta[property="og:image"]', 'meta[name="og:image"]',
+    'meta[property="og:image:url"]', 'meta[name="twitter:image"]',
+    'meta[property="twitter:image"]', 'meta[name="twitter:image:src"]',
   ]) {
     const el = doc.querySelector(sel);
     if (el) {
@@ -330,7 +261,6 @@ function parseOgFromHTML(html) {
       if (v && v.startsWith('http')) { ogImage = v; break; }
     }
   }
-
   let ogTitle = '';
   const tm = doc.querySelector('meta[property="og:title"]') || doc.querySelector('meta[name="og:title"]');
   if (tm) ogTitle = (tm.getAttribute('content') || '').trim();
@@ -338,19 +268,9 @@ function parseOgFromHTML(html) {
     const t = doc.querySelector('title');
     if (t) ogTitle = t.textContent.trim();
   }
-
   return { ogImage, ogTitle };
 }
 
-/* ══════════════════════════════════════════════════════════════
-   AI SUMMARY: OpenRouter (multi-model) → MiniMax fallback
-   ══════════════════════════════════════════════════════════════ */
-
-/* buildPrompt is now replaced by buildPromptWithContent inside getAISummary */
-
-/* ══════════════════════════════════════════════════════════════
-   FETCH PAGE TEXT — grab article body for richer AI context
-   ══════════════════════════════════════════════════════════════ */
 async function fetchPageText(url) {
   const proxies = [
     u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
@@ -369,9 +289,7 @@ async function fetchPageText(url) {
         html = await resp.text();
       }
       if (html.length < 200) continue;
-      // Strip tags, collapse whitespace, grab first ~1500 chars of body text
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      // Remove scripts/styles
       doc.querySelectorAll('script, style, nav, header, footer, aside').forEach(el => el.remove());
       const bodyText = (doc.body?.innerText || '').replace(/\s+/g, ' ').trim();
       if (bodyText.length > 100) return bodyText.slice(0, 1500);
@@ -381,14 +299,8 @@ async function fetchPageText(url) {
 }
 
 function buildPromptWithContent(url, pageTitle, pageText) {
-  const titleHint = pageTitle
-    ? `The article title is: "${pageTitle}".`
-    : 'Derive the topic from the URL slug.';
-
-  const contentHint = pageText
-    ? `\n\nHere is the article text (may be truncated):\n${pageText}`
-    : '';
-
+  const titleHint = pageTitle ? `The article title is: "${pageTitle}".` : 'Derive the topic from the URL slug.';
+  const contentHint = pageText ? `\n\nHere is the article text (may be truncated):\n${pageText}` : '';
   return `You are a cybersecurity newsletter writer. Given this article URL and context, generate a JSON response with exactly these fields:
 - "title": A concise, professional headline for the article. ${titleHint}
 - "description": A 2-3 sentence professional summary of what this cybersecurity news is about. Write in third person, factual tone. Focus on: what happened, who is affected, and why it matters. Keep it under 80 words.
@@ -398,12 +310,7 @@ URL: ${url}${contentHint}
 IMPORTANT: Return ONLY valid JSON, no markdown, no backticks, no explanation. Just the raw JSON object with "title" and "description" keys.`;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   AI CALL HELPERS — with per-model retry
-   ══════════════════════════════════════════════════════════════ */
 async function tryOpenRouterWithFallbacks(prompt) {
-  // Use OpenRouter's native model fallback: one request, auto-tries all models
-  // Plus response-healing plugin to auto-fix broken JSON from free models
   const resp = await fetchWithTimeout(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -431,23 +338,17 @@ async function tryOpenRouterWithFallbacks(prompt) {
   if (!resp.ok) {
     const retryable = resp.status === 429 || resp.status >= 500;
     let errMsg = `HTTP ${resp.status}`;
-    try {
-      const errData = await resp.json();
-      errMsg = errData.error?.message || errMsg;
-    } catch (_) {}
+    try { const errData = await resp.json(); errMsg = errData.error?.message || errMsg; } catch (_) {}
     return { result: null, retryable, status: resp.status, errMsg };
   }
 
   const data = await resp.json();
-
-  // Check for inline errors (200 status but error in body)
   const choiceError = data.choices?.[0]?.error;
   if (choiceError) {
     return { result: null, retryable: true, status: choiceError.code, errMsg: choiceError.message };
   }
 
   let text = data.choices?.[0]?.message?.content?.trim() || '';
-  // Assistant prefill started with '{', so prepend it if the model continued from there
   if (text && !text.startsWith('{')) text = '{' + text;
   if (!text) return { result: null, retryable: false, errMsg: 'Empty response' };
 
@@ -476,58 +377,38 @@ async function tryMiniMax(prompt, epUrl) {
   }, 20000);
 
   if (!resp.ok) return null;
-
   const data = await resp.json();
-  const text = data.choices?.[0]?.message?.content?.trim()
-            || data.output?.text?.trim()
-            || '';
+  const text = data.choices?.[0]?.message?.content?.trim() || data.output?.text?.trim() || '';
   if (!text) return null;
-
   const result = extractJSON(text);
   return (result && result.title && result.description) ? result : null;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   MAIN AI SUMMARY — with page scraping, retries & final fallback
-   ══════════════════════════════════════════════════════════════ */
 async function getAISummary(url, pageTitle, hasImage) {
-  // Fetch page content for richer prompts
   let pageText = '';
   try { pageText = await fetchPageText(url); } catch (_) {}
-
   const prompt = buildPromptWithContent(url, pageTitle, pageText);
 
-  // ── Pass 1: OpenRouter with native model fallback + response-healing ──
-  // One API call automatically tries all models in the list
   if (!openRouterDisabled) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { result, retryable, status, errMsg, usedModel } = await tryOpenRouterWithFallbacks(prompt);
-        if (result) {
-          if (usedModel) log(`    → Used model: ${usedModel}`);
-          return result;
-        }
-        // 401/402 = auth/credits problem — skip OpenRouter for rest of session
+        if (result) return result;
         if (status === 401 || status === 402) {
-          log(`    → OpenRouter: ${errMsg} — disabling for this session`, 'error');
           openRouterDisabled = true;
           break;
         }
         if (retryable && attempt === 0) {
-          log(`    → OpenRouter: ${errMsg || status}, retrying in 3s...`);
           await new Promise(r => setTimeout(r, 3000));
           continue;
         }
-        log(`    → OpenRouter failed: ${errMsg || 'no valid JSON'}`, 'error');
         break;
       } catch (e) {
-        log(`    → OpenRouter error: ${e.message}`, 'error');
         break;
       }
     }
   }
 
-  // ── Pass 2: MiniMax fallback ──
   const MINIMAX_ENDPOINTS = [
     'https://api.minimax.io/v1/chat/completions',
     MINIMAX_URL
@@ -539,13 +420,10 @@ async function getAISummary(url, pageTitle, hasImage) {
     } catch (_) {}
   }
 
-  // ── Pass 3: OpenRouter retry with simpler prompt (skip if auth broken) ──
   if (!openRouterDisabled) {
-    log('    → All providers failed, retrying with simpler prompt...', 'info');
     const simplePrompt = pageTitle
       ? `Write a 2-3 sentence cybersecurity newsletter summary for this article titled "${pageTitle}" (URL: ${url}).${pageText ? ' Article excerpt: ' + pageText.slice(0, 800) : ''} Return ONLY a JSON object like {"title":"...","description":"..."}.`
       : `Write a 2-3 sentence cybersecurity newsletter summary for this article: ${url}. Return ONLY a JSON object like {"title":"...","description":"..."}.`;
-
     try {
       const resp = await fetchWithTimeout(OPENROUTER_URL, {
         method: 'POST',
@@ -576,8 +454,6 @@ async function getAISummary(url, pageTitle, hasImage) {
     } catch (_) {}
   }
 
-  // ── Pass 4: Generate a smart fallback from page text / title ──
-  log('    → Generating fallback summary from metadata...', 'info');
   if (pageTitle || pageText) {
     const title = pageTitle || 'Security Advisory';
     let description = '';
@@ -685,16 +561,15 @@ async function generate() {
     const v = document.getElementById(`link${i}`).value.trim();
     if (v) links.push({ url: v, index: i });
   }
-  if (!links.length) { log('No links entered.', 'error'); return; }
+  if (!links.length) return;
 
   const btn = document.getElementById('generateBtn');
   btn.disabled = true; btn.textContent = 'Generating...';
   document.getElementById('downloadBtn').disabled = true;
   document.getElementById('copyBtn').disabled = true;
 
-  log(`Processing ${links.length} articles...`, 'info');
   setProgress(5);
-  openRouterDisabled = false; // Reset for each new generation
+  openRouterDisabled = false;
 
   const stories = [];
 
@@ -703,15 +578,12 @@ async function generate() {
     setStatus(index, 'processing');
 
     let ogImage = '', ogTitle = '';
-
-    // STEP 1: Extract thumbnail + title via metadata APIs
     try {
       const meta = await extractMetadata(url);
       ogImage = meta.ogImage;
       ogTitle = meta.ogTitle;
     } catch (e) {}
 
-    // STEP 2: AI for title + description only
     try {
       const ai = await getAISummary(url, ogTitle, !!ogImage);
       stories.push({
@@ -721,11 +593,8 @@ async function generate() {
         imageUrl: ogImage
       });
       setStatus(index, 'done');
-      log(`[${i+1}/${links.length}] ✓ ${ogImage ? '🖼️' : '⬜'} "${ai.title || ogTitle}"`, 'success');
     } catch (err) {
       setStatus(index, 'error');
-      log(`[${i+1}/${links.length}] ⚠ AI failed, using metadata fallback: ${ogTitle || url}`, 'error');
-      // Even on total failure, try to build something useful from the title
       let fallbackDesc = 'Summary generation failed.';
       if (ogTitle) {
         fallbackDesc = `This article covers ${ogTitle.toLowerCase().replace(/^[\W]+/, '')}. Review the full article for details on the security implications.`;
@@ -746,7 +615,6 @@ async function generate() {
   document.getElementById('rawHtml').value = generatedHTML;
 
   setProgress(100);
-  log(`Done! ${stories.length} stories generated.`, 'success');
 
   btn.disabled = false; btn.textContent = 'Regenerate';
   document.getElementById('downloadBtn').disabled = false;
@@ -759,13 +627,11 @@ function downloadHTML() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([generatedHTML], { type: 'text/html' }));
   a.download = `Newsletter_${n}.html`; a.click();
-  log('Downloaded.', 'success');
 }
 
 function copyHTML() {
   if (!generatedHTML) return;
   navigator.clipboard.writeText(generatedHTML).then(() => {
-    log('Copied to clipboard.', 'success');
     const b = document.getElementById('copyBtn');
     b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy HTML', 2000);
   });
