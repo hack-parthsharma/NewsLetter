@@ -174,6 +174,7 @@ const MINIMAX_URL = 'https://api.minimax.io/v1/text/chatcompletion_v2';
 const MINIMAX_MODEL = 'MiniMax-M2.5';
 
 let generatedHTML = '';
+let openRouterDisabled = false; // Set true on 401/402 to skip for remaining articles
 
 (function init() {
   document.getElementById('newsletterDate').value = new Date().toISOString().split('T')[0];
@@ -498,23 +499,31 @@ async function getAISummary(url, pageTitle, hasImage) {
 
   // ── Pass 1: OpenRouter with native model fallback + response-healing ──
   // One API call automatically tries all models in the list
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const { result, retryable, status, errMsg, usedModel } = await tryOpenRouterWithFallbacks(prompt);
-      if (result) {
-        if (usedModel) log(`    → Used model: ${usedModel}`);
-        return result;
+  if (!openRouterDisabled) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { result, retryable, status, errMsg, usedModel } = await tryOpenRouterWithFallbacks(prompt);
+        if (result) {
+          if (usedModel) log(`    → Used model: ${usedModel}`);
+          return result;
+        }
+        // 401/402 = auth/credits problem — skip OpenRouter for rest of session
+        if (status === 401 || status === 402) {
+          log(`    → OpenRouter: ${errMsg} — disabling for this session`, 'error');
+          openRouterDisabled = true;
+          break;
+        }
+        if (retryable && attempt === 0) {
+          log(`    → OpenRouter: ${errMsg || status}, retrying in 3s...`);
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        log(`    → OpenRouter failed: ${errMsg || 'no valid JSON'}`, 'error');
+        break;
+      } catch (e) {
+        log(`    → OpenRouter error: ${e.message}`, 'error');
+        break;
       }
-      if (retryable && attempt === 0) {
-        log(`    → OpenRouter: ${errMsg || status}, retrying in 3s...`);
-        await new Promise(r => setTimeout(r, 3000));
-        continue;
-      }
-      log(`    → OpenRouter failed: ${errMsg || 'no valid JSON'}`, 'error');
-      break;
-    } catch (e) {
-      log(`    → OpenRouter error: ${e.message}`, 'error');
-      break;
     }
   }
 
@@ -530,40 +539,42 @@ async function getAISummary(url, pageTitle, hasImage) {
     } catch (_) {}
   }
 
-  // ── Pass 3: OpenRouter retry with simpler prompt (no response_format, no prefill) ──
-  log('    → All providers failed, retrying with simpler prompt...', 'info');
-  const simplePrompt = pageTitle
-    ? `Write a 2-3 sentence cybersecurity newsletter summary for this article titled "${pageTitle}" (URL: ${url}).${pageText ? ' Article excerpt: ' + pageText.slice(0, 800) : ''} Return ONLY a JSON object like {"title":"...","description":"..."}.`
-    : `Write a 2-3 sentence cybersecurity newsletter summary for this article: ${url}. Return ONLY a JSON object like {"title":"...","description":"..."}.`;
+  // ── Pass 3: OpenRouter retry with simpler prompt (skip if auth broken) ──
+  if (!openRouterDisabled) {
+    log('    → All providers failed, retrying with simpler prompt...', 'info');
+    const simplePrompt = pageTitle
+      ? `Write a 2-3 sentence cybersecurity newsletter summary for this article titled "${pageTitle}" (URL: ${url}).${pageText ? ' Article excerpt: ' + pageText.slice(0, 800) : ''} Return ONLY a JSON object like {"title":"...","description":"..."}.`
+      : `Write a 2-3 sentence cybersecurity newsletter summary for this article: ${url}. Return ONLY a JSON object like {"title":"...","description":"..."}.`;
 
-  try {
-    const resp = await fetchWithTimeout(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_KEY}`,
-        'HTTP-Referer': 'https://cybersec-newsletter-gen.app',
-        'X-OpenRouter-Title': 'CyberSec Newsletter Gen'
-      },
-      body: JSON.stringify({
-        model: OPENROUTER_MODELS[0],
-        models: OPENROUTER_MODELS,
-        route: 'fallback',
-        max_tokens: 500,
-        temperature: 0.5,
-        plugins: [{ id: 'response-healing' }],
-        messages: [{ role: 'user', content: simplePrompt }]
-      })
-    }, 30000);
-    if (resp.ok) {
-      const data = await resp.json();
-      const text = data.choices?.[0]?.message?.content?.trim();
-      if (text) {
-        const result = extractJSON(text);
-        if (result && result.title && result.description) return result;
+    try {
+      const resp = await fetchWithTimeout(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_KEY}`,
+          'HTTP-Referer': 'https://cybersec-newsletter-gen.app',
+          'X-OpenRouter-Title': 'CyberSec Newsletter Gen'
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODELS[0],
+          models: OPENROUTER_MODELS,
+          route: 'fallback',
+          max_tokens: 500,
+          temperature: 0.5,
+          plugins: [{ id: 'response-healing' }],
+          messages: [{ role: 'user', content: simplePrompt }]
+        })
+      }, 30000);
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data.choices?.[0]?.message?.content?.trim();
+        if (text) {
+          const result = extractJSON(text);
+          if (result && result.title && result.description) return result;
+        }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   // ── Pass 4: Generate a smart fallback from page text / title ──
   log('    → Generating fallback summary from metadata...', 'info');
@@ -683,6 +694,7 @@ async function generate() {
 
   log(`Processing ${links.length} articles...`, 'info');
   setProgress(5);
+  openRouterDisabled = false; // Reset for each new generation
 
   const stories = [];
 
