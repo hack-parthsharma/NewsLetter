@@ -482,7 +482,7 @@ function buildNewsletterHTML(stories) {
   const num = document.getElementById('newsletterNum').value || '194';
   const date = formatDate(document.getElementById('newsletterDate').value);
   const company = document.getElementById('companyName').value || 'Casepoint';
-  const logo = document.getElementById('logoUrl').value;
+  const logo = document.getElementById('logoUrl').value || 'https://casepoint.com/wp-content/uploads/email/casepoint-logo.png';
 
   let html = '';
   stories.forEach((s, i) => {
